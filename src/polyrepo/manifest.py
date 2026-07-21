@@ -1,10 +1,10 @@
 """
 - description:
-    Load repositories.yaml into immutable nested configuration objects and a
-    name-addressable repository registry for synchronization operations.
+    Load polyrepo.yaml into immutable nested configuration objects, including a
+    name-addressable repository registry and launch configuration.
 - usage:
     uv run python -c "from pathlib import Path; from polyrepo.manifest import load_state; print(load_state(Path('.')))"
-    # Point load_state at a workspace containing repositories.yaml.
+    # Point load_state at a workspace containing polyrepo.yaml.
 - user_story:
     content:
         As a synchronization implementation, I want the workspace manifest converted
@@ -25,6 +25,9 @@ from types import MappingProxyType
 import yaml
 
 
+MANIFEST_FILENAME = "polyrepo.yaml"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceConfig:
     name: str
@@ -36,6 +39,25 @@ class SyncConfig:
     snapshot_path: Path
     max_file_size_bytes: int
     patch_size_warn_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class GcsNodeRangeConfig:
+    read_bucket: str
+    write_bucket: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchGcsConfig:
+    default_root: str
+    node_ranges: tuple[GcsNodeRangeConfig, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchConfig:
+    gcs: LaunchGcsConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +89,13 @@ class PolyrepoState:
     manifest_digest: str
     workspace: WorkspaceConfig
     sync: SyncConfig
+    launch: LaunchConfig
     repositories: RepositoryRegistry
 
 
 def load_state(workspace_root: Path) -> PolyrepoState:
     resolved_workspace_root = workspace_root.expanduser().resolve()
-    manifest_path = resolved_workspace_root / "repositories.yaml"
+    manifest_path = resolved_workspace_root / MANIFEST_FILENAME
     manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
 
     canonical_manifest = json.dumps(
@@ -84,8 +107,11 @@ def load_state(workspace_root: Path) -> PolyrepoState:
 
     workspace_data = manifest_data["workspace"]
     sync_data = manifest_data["sync"]
+    launch_data = manifest_data["launch"]
+    gcs_data = launch_data["gcs"]
     repository_data = manifest_data["repositories"]
-    assert repository_data, "repositories.yaml must declare at least one repository"
+    assert repository_data, "polyrepo.yaml must declare at least one repository"
+    assert gcs_data["node_ranges"], "launch.gcs.node_ranges must declare at least one range"
 
     snapshot_path = Path(sync_data["snapshot_path"]).expanduser()
     if not snapshot_path.is_absolute():
@@ -113,6 +139,20 @@ def load_state(workspace_root: Path) -> PolyrepoState:
             snapshot_path=snapshot_path,
             max_file_size_bytes=sync_data["max_file_size_bytes"],
             patch_size_warn_bytes=sync_data["patch_size_warn_bytes"],
+        ),
+        launch=LaunchConfig(
+            gcs=LaunchGcsConfig(
+                default_root=gcs_data["default_root"],
+                node_ranges=tuple(
+                    GcsNodeRangeConfig(
+                        read_bucket=node_range["read_bucket"],
+                        write_bucket=node_range["write_bucket"],
+                        start=node_range["start"],
+                        end=node_range["end"],
+                    )
+                    for node_range in gcs_data["node_ranges"]
+                ),
+            ),
         ),
         repositories=RepositoryRegistry(MappingProxyType(entries)),
     )

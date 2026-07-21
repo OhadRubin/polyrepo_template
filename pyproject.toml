@@ -4,14 +4,23 @@ version = "0.1.0"
 description = "Manifest-driven synchronization for polyrepo development workspaces"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
-dependencies = ["pyyaml>=6.0.2,<7"]
+dependencies = [
+    "cloudpathlib[gs]>=0.24.0",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "networkx>=3.4.2",
+    "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.2,<7",
+]
 
 [project.scripts]
 polyrepo-sync = "polyrepo.sync_repo:main"
+polyrepo-heredoc = "polyrepo_launch.heredoc_launcher:main"
+queue-cli = "tpu_dispatch_cli.queue_cli:main"
 
 [build-system]
 requires = ["uv-build>=0.11.28,<0.12"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "polyrepo"
+module-name = ["polyrepo", "polyrepo_launch", "tpu_dispatch_cli"]
