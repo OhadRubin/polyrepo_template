@@ -1,5 +1,7 @@
 """Stable queueing machinery for training-script render callbacks."""
 
+# Public package module docs stay compact; private repo frontmatter is optional here.
+
 from __future__ import annotations
 
 import argparse
@@ -12,7 +14,6 @@ import subprocess
 import tempfile
 import warnings
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -26,6 +27,7 @@ warnings.filterwarnings(
 
 from cloudpathlib import CloudPath
 from dotenv import load_dotenv
+from polyrepo.artifact_id import new_artifact_id
 from polyrepo import sync_repo as polyrepo_sync
 from polyrepo.manifest import load_state as load_polyrepo_state
 
@@ -223,13 +225,14 @@ def _parse_args() -> LaunchOptions:
     parser = argparse.ArgumentParser(
         description="Render and enqueue the training tasks defined by the caller."
     )
-    launch_target = parser.add_mutually_exclusive_group()
+    # Dry-runs still use target metadata for bucket policy and worker count.
+    launch_target = parser.add_mutually_exclusive_group(required=True)
     launch_target.add_argument(
         "--launch",
         nargs="+",
         help=(
             "Node ids or TPU names. Supports comma-separated node ids and shell "
-            "expansion like v5p-32-node-{21..40}. Required unless --dry-run is used."
+            "expansion like v5p-32-node-{21..40}. Required for every invocation."
         ),
     )
     launch_target.add_argument(
@@ -257,8 +260,6 @@ def _parse_args() -> LaunchOptions:
     args = parser.parse_args()
     launch_node_ids = _parse_launch_nodes(args.launch)
     launch_affinity_node_ids = _parse_launch_nodes(args.launch_affinity)
-    if not (launch_node_ids or launch_affinity_node_ids):
-        parser.error("--launch or --launch-affinity is required")
     workers_per_node = args.workers_per_node
     if workers_per_node is None:
         launch_raw = args.launch or args.launch_affinity
@@ -305,14 +306,14 @@ def execute_tasks(
 ) -> None:
     print(f"=== Generated {len(tasks)} task(s) ===")
     root = workspace_root()
-    generated_script_run_id = (
-        "dry_run" if options.dry_run else datetime.now().strftime("%H%M%S_%Y%m%d")
-    )
+    generated_script_run_id = "dry_run" if options.dry_run else new_artifact_id()
     setup_template = (root / "setup.sh").read_text()
     polyrepo_state = load_polyrepo_state(root)
     workspace_name = polyrepo_state.workspace.name
     assert workspace_name and "/" not in workspace_name, workspace_name
-    polyrepo_publication_root = f"{options.gcs_roots.write_root}/polyrepo/{workspace_name}"
+    publication_layout = polyrepo_sync.PublicationLayout(
+        f"{options.gcs_roots.write_root}/polyrepo/{workspace_name}"
+    )
     repository_identities = {
         name: {
             "commit": identity.commit,
@@ -333,11 +334,11 @@ def execute_tasks(
             "__SYNC_STR__", _dry_run_workspace_target_shell()
         )
         polyrepo_manifest_digest = polyrepo_state.manifest_digest
-        polyrepo_base_uri = f"{polyrepo_publication_root}/base.tar.gz"
+        polyrepo_base_uri = publication_layout.frozen_base_uri
         polyrepo_patch_uri = "DRY_RUN_UNPUBLISHED"
         wandb_key = "DRY_RUN_WANDB_KEY"
     else:
-        published = polyrepo_sync.publish(root, polyrepo_publication_root)
+        published = polyrepo_sync.publish(root, publication_layout.gcs_root)
         setup = published.render_setup(setup_template)
         polyrepo_manifest_digest = published.manifest_digest
         polyrepo_base_uri = published.base_uri

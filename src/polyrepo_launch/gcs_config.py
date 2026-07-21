@@ -50,6 +50,7 @@ def resolve_default_gcs_root() -> str:
 
 def resolve_gcs_roots_for_node_ids(node_ids: tuple[int, ...]) -> GcsRoots:
     gcs = launch_gcs_config()
+    # This resolver owns bucket policy selection; dispatch owns fleet node validity.
     policies = {
         (node_range.read_bucket, node_range.write_bucket)
         for node_id in node_ids

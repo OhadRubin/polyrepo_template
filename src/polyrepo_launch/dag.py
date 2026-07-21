@@ -1,3 +1,4 @@
+# Public package module docs stay compact; private repo frontmatter is optional here.
 import networkx as nx
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -357,6 +358,7 @@ def named(label):
 
 
 def parse_type(x):
+    # Experiment configs are project-authored and trusted for this launcher DSL.
     try:
       value = str(x).strip()
       parsed_value = eval(value)
@@ -434,6 +436,7 @@ def get_all_experiments(experiment, config, exp_count, stop_fn=lambda x: False):
 
         arg_list = []
         for var_name, var_value in ARG_VARS.items():
+            # Export values preserve the same trusted config boundary as parse_type.
             arg_list.append(f'export {var_name}={var_value}')
         args = "\n".join(arg_list)
         assert WANDB_NAME not in var_dict

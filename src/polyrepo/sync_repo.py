@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from .artifact_id import new_artifact_id
 from .manifest import MANIFEST_FILENAME, PolyrepoState, RepositoryConfig, load_state
 
 
@@ -60,6 +61,20 @@ class GsutilArtifactStore:
             [self.executable, "cp", str(source), destination],
             check=True,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationLayout:
+    """Give the frozen base a stable URI and each patch a publication URI."""
+
+    gcs_root: str
+
+    @property
+    def frozen_base_uri(self) -> str:
+        return f"{self.gcs_root}/base.tar.gz"
+
+    def patch_uri(self, patch_id: str) -> str:
+        return f"{self.gcs_root}/patches/patch_{patch_id}.tar.gz"
 
 
 def _normalize_gcs_root(gcs_root: str) -> str:
@@ -212,7 +227,11 @@ def _create_base_archive(state: PolyrepoState) -> None:
     )
 
 
-def _freeze(state: PolyrepoState, artifact_store: GsutilArtifactStore, base_uri: str) -> None:
+def _freeze(
+    state: PolyrepoState,
+    artifact_store: GsutilArtifactStore,
+    publication_layout: PublicationLayout,
+) -> None:
     if state.sync.snapshot_path.exists():
         shutil.rmtree(state.sync.snapshot_path)
     state.sync.snapshot_path.mkdir(parents=True)
@@ -252,8 +271,11 @@ def _freeze(state: PolyrepoState, artifact_store: GsutilArtifactStore, base_uri:
         encoding="utf-8",
     )
     _create_base_archive(state)
-    artifact_store.upload(state.sync.snapshot_path / "base.tar.gz", base_uri)
-    print(f"Frozen snapshot uploaded to {base_uri}")
+    artifact_store.upload(
+        state.sync.snapshot_path / "base.tar.gz",
+        publication_layout.frozen_base_uri,
+    )
+    print(f"Frozen snapshot uploaded to {publication_layout.frozen_base_uri}")
 
 
 def _frozen_base_matches(state: PolyrepoState) -> bool:
@@ -265,7 +287,10 @@ def _frozen_base_matches(state: PolyrepoState) -> bool:
         return False
     if not (state.sync.snapshot_path / "base.tar.gz").is_file():
         return False
-    return all(_hashes_path(state, repository).is_file() for repository in state.repositories.values())
+    return all(
+        _hashes_path(state, repository).is_file()
+        for repository in state.repositories.values()
+    )
 
 
 def _print_state_summary(state: PolyrepoState, publication_gcs_root: str) -> None:
@@ -311,10 +336,10 @@ def _copy_patch_file(repository: RepositoryConfig, relative_path: str, destinati
 def _compute_patch(
     state: PolyrepoState,
     artifact_store: GsutilArtifactStore,
-    publication_gcs_root: str,
+    publication_layout: PublicationLayout,
 ) -> str:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    patch_directory = Path(tempfile.gettempdir()) / f"patch_{timestamp}"
+    patch_id = new_artifact_id()
+    patch_directory = Path(tempfile.gettempdir()) / f"patch_{patch_id}"
     patch_directory.mkdir()
 
     try:
@@ -325,7 +350,7 @@ def _compute_patch(
                 _copy_patch_file(repository, relative_path, repository_patch_directory)
             print(f"  {repository.name}: {len(changed_files)} changed files")
 
-        patch_tar_name = f"patch_{timestamp}.tar.gz"
+        patch_tar_name = f"patch_{patch_id}.tar.gz"
         patch_tar_path = Path(tempfile.gettempdir()) / patch_tar_name
         subprocess.run(
             ["tar", "czf", str(patch_tar_path), "-C", str(patch_directory), "."],
@@ -340,7 +365,7 @@ def _compute_patch(
                 "Consider re-freezing."
             )
 
-        patch_uri = f"{publication_gcs_root}/patches/{patch_tar_name}"
+        patch_uri = publication_layout.patch_uri(patch_id)
         artifact_store.upload(patch_tar_path, patch_uri)
         patch_tar_path.unlink()
         return patch_uri
@@ -365,35 +390,37 @@ cd "$POLYREPO_WORKSPACE_ROOT"
 
 def publish(workspace_root: Path, gcs_root: str) -> PublishedWorkspace:
     state = load_state(workspace_root)
-    publication_gcs_root = _normalize_gcs_root(gcs_root)
+    publication_layout = PublicationLayout(_normalize_gcs_root(gcs_root))
     artifact_store = GsutilArtifactStore(executable="gsutil")
-    base_uri = f"{publication_gcs_root}/base.tar.gz"
 
     with _exclusive_snapshot_lock(state.sync.snapshot_path):
         if not _frozen_base_matches(state):
             print("Frozen base is missing or manifest-mismatched; rebuilding.")
-            _freeze(state, artifact_store, base_uri)
+            _freeze(state, artifact_store, publication_layout)
         else:
             print(f"Using existing frozen base at {state.sync.snapshot_path / 'base.tar.gz'}")
-        patch_uri = _compute_patch(state, artifact_store, publication_gcs_root)
+        patch_uri = _compute_patch(state, artifact_store, publication_layout)
 
     return PublishedWorkspace(
         manifest_digest=state.manifest_digest,
-        gcs_root=publication_gcs_root,
-        base_uri=base_uri,
+        gcs_root=publication_layout.gcs_root,
+        base_uri=publication_layout.frozen_base_uri,
         patch_uri=patch_uri,
-        bootstrap_shell=_bootstrap_shell(state, base_uri, patch_uri),
+        bootstrap_shell=_bootstrap_shell(
+            state,
+            publication_layout.frozen_base_uri,
+            patch_uri,
+        ),
     )
 
 
 def freeze(workspace_root: Path, gcs_root: str) -> str:
     state = load_state(workspace_root)
-    publication_gcs_root = _normalize_gcs_root(gcs_root)
+    publication_layout = PublicationLayout(_normalize_gcs_root(gcs_root))
     artifact_store = GsutilArtifactStore(executable="gsutil")
-    base_uri = f"{publication_gcs_root}/base.tar.gz"
     with _exclusive_snapshot_lock(state.sync.snapshot_path):
-        _freeze(state, artifact_store, base_uri)
-    return base_uri
+        _freeze(state, artifact_store, publication_layout)
+    return publication_layout.frozen_base_uri
 
 
 def _parse_args(arguments: list[str]) -> argparse.Namespace:

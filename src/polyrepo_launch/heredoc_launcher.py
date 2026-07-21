@@ -39,10 +39,10 @@ import argparse
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 from cloudpathlib import CloudPath
+from polyrepo.artifact_id import new_artifact_id
 
 from .gcs_config import resolve_gcs_roots_for_node_ids, workspace_root
 from .generator import _parse_launch_nodes, infer_workers_per_node
@@ -136,12 +136,12 @@ def main() -> None:
     args = parser.parse_args()
 
     root = workspace_root()
-    timestamp = datetime.now().strftime("%H%M%S_%Y%m%d")
+    run_id = new_artifact_id()
     generator_script = repo_local_file(args.generator_script, root)
     stdin_payload = args.heredoc_file is None
     if stdin_payload:
         assert not sys.stdin.isatty(), "no --heredoc-file and no heredoc on stdin"
-        heredoc_file = root / f"heredoc_stdin_{timestamp}.sh"
+        heredoc_file = root / f"heredoc_stdin_{run_id}.sh"
         heredoc_file.write_text(sys.stdin.read())
         print(f"=== Wrote stdin payload to {heredoc_file} ===")
         payload_stem = "stdin"
@@ -153,7 +153,7 @@ def main() -> None:
     launch_targets = args.launch if args.launch is not None else args.launch_affinity
     launch_node_ids = _parse_launch_nodes(launch_targets)
     gcs_roots = resolve_gcs_roots_for_node_ids(launch_node_ids)
-    result_name = f"{generator_script.stem}_{payload_stem}_{timestamp}"
+    result_name = f"{generator_script.stem}_{payload_stem}_{run_id}"
     result_root = f"{gcs_roots.write_root}/runs/heredoc_results/{result_name}"
     workers_per_node = (
         args.workers_per_node

@@ -31,7 +31,7 @@ The core `polyrepo` package provides:
 
 - Manifest parsing for a named polyrepo workspace.
 - A repository registry keyed by manifest name.
-- Frozen base archives keyed by manifest digest.
+- One canonical frozen-base archive per workspace GCS root.
 - Patch archives for tracked and untracked Git files.
 - A Python API for launcher code.
 - A `polyrepo-sync` CLI for manual freeze and publish operations.
@@ -170,7 +170,8 @@ the manifest digest still matches.
 that rebuilding the frozen base may be cleaner.
 
 `launch.gcs.default_root` is the bucket-level GCS URI used by launch helpers
-when they need one project-wide storage root.
+when they need one project-wide storage root. `queue-cli run-script` stores
+one-off scripts below `<default-root>/scratch/oneoff`.
 
 `launch.gcs.node_ranges` maps TPU node id ranges to read and write buckets. A
 launch target must match exactly one read/write bucket pair.
@@ -266,14 +267,18 @@ and bootstrap shell.
 
 ## Sync Model
 
+The base and patches have separate lifecycles:
+
 ```text
+freeze(workspace_root, gcs_root)
+  -> replace the canonical <gcs-root>/base.tar.gz
+
 publish(workspace_root, gcs_root)
-  -> load polyrepo.yaml
-  -> compute the manifest digest
-  -> rebuild base.tar.gz when the cached base is missing or stale
+  -> load polyrepo.yaml and compute its digest
+  -> reuse the canonical <gcs-root>/base.tar.gz
+  -> refresh that base when the local frozen cache is missing or stale
   -> compare current files with frozen hashes
-  -> create patch_<timestamp>.tar.gz
-  -> upload base and patch artifacts
+  -> upload one patches/patch_<artifact-id>.tar.gz
   -> return remote bootstrap shell
 ```
 
@@ -286,7 +291,7 @@ The frozen base is uploaded to:
 Patches are uploaded to:
 
 ```text
-<gcs-root>/patches/patch_<timestamp>.tar.gz
+<gcs-root>/patches/patch_<artifact-id>.tar.gz
 ```
 
 The file set comes from:

@@ -47,14 +47,15 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
+from polyrepo_launch.gcs_config import resolve_default_gcs_root
 
 
+# Temporary packaged copy while queue ownership moves after the dispatch module merge.
 API_KEY_ENV = "DEPLOY_API_KEY"
 SERVER_URL_ENV = "TPU_DISPATCH_SERVER_URL"
 LIVE_VIEW_URL_ENV = "TPU_LIVE_VIEW_URL"
 LOCAL_DISPATCH_URL = "http://localhost:8105"
 LOCAL_LIVE_VIEW_URL = "http://localhost:8066"
-ONEOFF_GCS_BASE = "gs://example-bucket/scratch/oneoff"
 DEFAULT_N_WORKERS = 4
 DEFAULT_PRIORITY = 1
 DEFAULT_JOB_CLASS = "regular"
@@ -463,7 +464,7 @@ def upload_script_to_gcs(script_path: str, gcs_base: str) -> dict[str, str]:
     if not path.is_file():
         raise QueueCliError(f"script path is not a file: {path}")
     content = path.read_bytes()
-    content_hash = hashlib.sha256(content).hexdigest()[:8]
+    content_hash = hashlib.sha256(content).hexdigest()
     date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     gcs_path = f"{gcs_base.rstrip('/')}/{date}/{content_hash}_{path.stem}.sh"
     try:
@@ -476,7 +477,10 @@ def upload_script_to_gcs(script_path: str, gcs_base: str) -> dict[str, str]:
 
 def run_script(client: DispatchQueueClient, args: argparse.Namespace) -> dict[str, Any]:
     target_affinity = affinity_query(args)
-    uploaded = upload_script_to_gcs(args.script_path, args.gcs_base)
+    uploaded = upload_script_to_gcs(
+        args.script_path,
+        f"{resolve_default_gcs_root()}/scratch/oneoff",
+    )
     command = f"gsutil cat {uploaded['gcs_path']} > /tmp/job.sh && bash /tmp/job.sh"
     payload = {
         "n_workers": require_positive_int(args.n_workers, "n_workers"),
@@ -525,8 +529,6 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="Queue priority; higher claims first")
     run_script_parser.add_argument("--job-class", choices=JOB_CLASSES, default=DEFAULT_JOB_CLASS,
                                    help="Dispatch class")
-    run_script_parser.add_argument("--gcs-base", default=ONEOFF_GCS_BASE,
-                                   help="GCS prefix for uploaded one-off scripts")
     add_affinity_arguments(run_script_parser)
 
     list_parser = subparsers.add_parser("list", help="List jobs")
