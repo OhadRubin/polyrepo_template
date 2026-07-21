@@ -1,144 +1,22 @@
-# Polyrepo Workspace Library
+The **execution substrate** packages a local, multi-repository workspace so it can be reconstructed and run on remote machines. It lets developers launch uncommitted or experimental code without pushing every change to source control or manually copying files.
 
-This project provides a small Python library for publishing a local polyrepo
-workspace as one remote workspace state. A workspace is defined by a
-`repositories.yaml` manifest that lists each component repository, where it lives
-locally, and where it should be reconstructed remotely.
+`polyrepo.yaml` defines the participating repositories, their local locations, remote directory structure, and launch storage policy. During publication, the substrate creates:
 
-## Core Terms
+* A reusable **base archive** containing a frozen workspace snapshot.
+* A smaller **patch archive** containing the current tracked and visible untracked changes.
+* **Bootstrap shell code** that downloads both archives, reconstructs the workspace, and prepares it for execution.
 
-- **Polyrepo workspace:** A local directory that coordinates multiple independent Git repositories.
-- **Repository registry:** The `repositories` mapping in `repositories.yaml`.
-- **Launcher:** Application, experiment, test, or deployment code that decides when to publish a workspace.
-- **Published workspace:** The immutable result returned by `publish()`, including artifact locations and setup shell.
+Launchers embed this bootstrap code into task scripts, then add dependency setup and workload commands. The substrate handles workspace transfer and reconstruction, while launchers and backend systems handle task planning, scheduling, resources, queues, and job lifecycle. This repository also includes generic launch helpers and a TPU dispatch CLI; project-specific bucket policy stays in files beside the workspace manifest.
 
-## Package Layout
+The broader launch architecture has four layers:
 
-```text
-polyrepo_template/
-|-- pyproject.toml
-|-- uv.lock
-|-- README.md
-`-- src/
-    `-- polyrepo/
-        |-- __init__.py
-        |-- manifest.py
-        `-- sync_repo.py
-```
+1. **Planning:** Defines tasks, parameters, stages, and dependencies.
+2. **Execution shaping:** Selects or modifies which tasks become launch requests.
+3. **Launch orchestration:** Publishes the workspace, creates scripts, and stores them.
+4. **Submission:** Sends those scripts to local, dispatch, or cluster backends.
 
-## Workspace Manifest
+The same process can support one-off diagnostic commands, keeping operator tools and larger workloads on one execution path.
 
-```yaml
-workspace:
-  name: my-product
-  remote_path: my-product-workspace
+Only source-relevant files are be published. Ignored files—such as datasets, credentials, checkpoints, generated outputs, and machine-specific artifacts—remain outside the archives. Because patches may contain unpublished code or configuration, they require controlled storage and source-code-level security. Generated scripts can contain the W&B key, so keep the GCS artifact bucket private.
 
-sync:
-  snapshot_path: ~/.polyrepo-snapshots/my-product
-  max_file_size_bytes: 10485760
-  patch_size_warn_bytes: 1048576
-
-repositories:
-  frontend:
-    url: git@github.com:my-org/frontend.git
-    path: ../frontend
-
-  backend:
-    url: git@github.com:my-org/backend.git
-    path: ../backend
-```
-
-The manifest owns workspace topology, snapshot policy, and repository membership.
-The launcher supplies the GCS artifact namespace when it publishes.
-
-## Python API
-
-```python
-from pathlib import Path
-
-from polyrepo import sync_repo
-
-
-workspace_root = Path("~/my-product-workspace").expanduser()
-published = sync_repo.publish(workspace_root, "gs://my-product-bucket/polyrepo-sync")
-setup = published.render_setup(Path("setup.sh").read_text())
-```
-
-`publish()` loads the manifest, builds or reuses a frozen base archive, creates a
-patch archive for the current working state, uploads both artifacts, and returns
-the shell needed to reconstruct the workspace remotely.
-
-The returned `PublishedWorkspace` provides:
-
-- `manifest_digest`: Identity of the manifest used for publication.
-- `gcs_root`: Launcher-selected artifact namespace.
-- `base_uri`: GCS location of the frozen base.
-- `patch_uri`: GCS location of the current working-state patch.
-- `bootstrap_shell`: Commands that reconstruct every registered repository remotely.
-- `render_setup(template)`: Injects the reconstruction shell into a launcher setup template.
-
-## Command-Line Sync
-
-Rebuild and upload the frozen base deliberately:
-
-```bash
-uv run python -m polyrepo.sync_repo freeze \
-  --workspace-root ~/my-product-workspace \
-  --gcs-root gs://my-product-bucket/polyrepo-sync
-```
-
-Publish the current patch. This creates the base first when the local frozen
-snapshot is missing or no longer matches the manifest digest:
-
-```bash
-uv run python -m polyrepo.sync_repo publish \
-  --workspace-root ~/my-product-workspace \
-  --gcs-root gs://my-product-bucket/polyrepo-sync
-```
-
-When the package is installed in the active `uv` environment, the same commands
-are available through the console entry point:
-
-```bash
-uv run polyrepo-sync freeze --workspace-root ~/my-product-workspace --gcs-root gs://my-product-bucket/polyrepo-sync
-uv run polyrepo-sync publish --workspace-root ~/my-product-workspace --gcs-root gs://my-product-bucket/polyrepo-sync
-```
-
-Both commands print the resolved workspace root, manifest path, manifest digest,
-snapshot path, publication GCS root, and manifest-derived local and remote paths
-for every repository.
-
-## Synchronization Flow
-
-```text
-publish(workspace_root, gcs_root)
-  -> read repositories.yaml
-  -> construct PolyrepoState
-  -> create or reuse the manifest-matched frozen base
-  -> compute one patch across the repository registry
-  -> upload publication artifacts
-  -> generate remote reconstruction shell
-  -> return PublishedWorkspace
-```
-
-The frozen base is uploaded as `<gcs-root>/base.tar.gz`. Each publication patch
-is uploaded as `<gcs-root>/patches/patch_<timestamp>.tar.gz`. Remote
-reconstruction extracts the frozen base and overlays the patch.
-
-## Runtime Requirements
-
-- Python 3.10 through 3.12.
-- `uv` for local development commands.
-- Git repositories present at every local path declared by `repositories.yaml`.
-- Authenticated `gsutil` access to the launcher-supplied publication namespace.
-- Bash, `gsutil`, `tar`, and `cp` in the remote launcher environment.
-- A launcher setup template containing `__SYNC_STR__` when `render_setup()` is used.
-
-## Verification
-
-```bash
-uv sync
-uv run python -c "from polyrepo import PublishedWorkspace, sync_repo; assert callable(sync_repo.publish); assert PublishedWorkspace"
-uv run polyrepo-sync --help
-uv build
-```
+Overall, the substrate creates a shared contract between development and remote execution: declare the workspace once, publish its current state at launch time, reconstruct it remotely, and submit the resulting scripts through any supported execution backend.

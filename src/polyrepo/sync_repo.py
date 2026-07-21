@@ -5,9 +5,9 @@
 - usage:
     uv run python -c "from pathlib import Path; from polyrepo import sync_repo; print(sync_repo.publish(Path('.'), 'gs://my-bucket/polyrepo-sync'))"
     # Call publish from a launcher at its deployment boundary.
-    uv run python -m polyrepo.sync_cli freeze --workspace-root . --gcs-root gs://my-bucket/polyrepo-sync
+    uv run python -m polyrepo.sync_repo freeze --workspace-root . --gcs-root gs://my-bucket/polyrepo-sync
     # Rebuild base.tar.gz from the manifest-driven repository registry.
-    uv run python -m polyrepo.sync_cli publish --workspace-root . --gcs-root gs://my-bucket/polyrepo-sync
+    uv run python -m polyrepo.sync_repo publish --workspace-root . --gcs-root gs://my-bucket/polyrepo-sync
     # Upload a patch and print publication JSON.
 - user_story:
     content:
@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .manifest import PolyrepoState, RepositoryConfig, load_state
+from .manifest import MANIFEST_FILENAME, PolyrepoState, RepositoryConfig, load_state
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,7 +219,7 @@ def _freeze(state: PolyrepoState, artifact_store: GsutilArtifactStore, base_uri:
 
     workspace_path = state.sync.snapshot_path / _workspace_home_path(state)
     workspace_path.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(state.manifest_path, workspace_path / "repositories.yaml")
+    shutil.copy2(state.manifest_path, workspace_path / MANIFEST_FILENAME)
 
     for repository in state.repositories.values():
         assert repository.local_path.exists(), repository.local_path
@@ -405,7 +405,7 @@ def _parse_args(arguments: list[str]) -> argparse.Namespace:
 
     freeze_parser = subparsers.add_parser(
         "freeze",
-        help="Rebuild and upload base.tar.gz from repositories.yaml.",
+        help="Rebuild and upload base.tar.gz from polyrepo.yaml.",
     )
     freeze_parser.add_argument("--workspace-root", type=Path, required=True)
     freeze_parser.add_argument("--gcs-root", required=True)
