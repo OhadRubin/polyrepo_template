@@ -2,7 +2,9 @@
 - description:
     Package the command-line client for the local TPU dispatch HTTP API.
 - usage:
-    uv run queue-cli --help
+    uv tool install .
+    # Install the package's command-line tools from the repository root.
+    queue-cli --help
     # Use queue-cli to enqueue, inspect, cancel, and reassign dispatch jobs.
 - user_story:
     content:

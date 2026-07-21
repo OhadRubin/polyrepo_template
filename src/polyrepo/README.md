@@ -45,6 +45,12 @@ This distribution also includes:
   rendering, and heredoc launches.
 - `tpu_dispatch_cli`, which installs the `queue-cli` submission command.
 
+Install the command-line tools from the repository checkout:
+
+```bash
+uv tool install .
+```
+
 ## Planned TPU Queue Integration
 
 The next integration target is a training launcher that renders shell scripts
@@ -351,7 +357,7 @@ uv sync
 uv run python -c "from polyrepo import PublishedWorkspace, sync_repo; assert callable(sync_repo.publish); assert PublishedWorkspace"
 uv run polyrepo-sync --help
 uv run polyrepo-heredoc --help
-uv run queue-cli --help
+queue-cli --help
 uv build
 ```
 

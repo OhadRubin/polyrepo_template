@@ -5,19 +5,21 @@
     API: queue CRUD, job lookup, cancellation, transition inspection, node/job
     status, and one-off script enqueueing.
 - usage:
+    uv tool install .
+    # Install queue-cli from the polyrepo-template checkout.
     # list jobs through the local dispatch daemon
-    uv run queue-cli list
+    queue-cli list
     # enqueue a regular command for node 21
-    uv run queue-cli enqueue 'hostname' --node-id 21
+    queue-cli enqueue 'hostname' --node-id 21
     # enqueue a regular command for any v6e node 1 through 20
-    uv run queue-cli enqueue 'hostname' --node-range 1-20 --node-prefix v6e-16-node
+    queue-cli enqueue 'hostname' --node-range 1-20 --node-prefix v6e-16-node
     # move a queued or active job to any v6e node 1 through 20
-    uv run queue-cli reassign 76332eed --node-range 1-20 --node-prefix v6e-16-node
+    queue-cli reassign 76332eed --node-range 1-20 --node-prefix v6e-16-node
     # upload a script to GCS and enqueue a fetch-and-run command
-    uv run queue-cli run-script ./job.sh --node-id 21
+    queue-cli run-script ./job.sh --node-id 21
     # inspect the worker.py tmux output for a node or assigned job
-    uv run queue-cli logs --node-id 21 --lines 200
-    uv run queue-cli logs --job-id 76332eed --lines 200
+    queue-cli logs --node-id 21 --lines 200
+    queue-cli logs --job-id 76332eed --lines 200
 - user_story:
     content:
         As the operator, Ohad needs the queue to have the same practical CLI
