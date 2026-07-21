@@ -1,14 +1,15 @@
 """
 - description:
-    Verify shared artifact identity and manifest-backed queue upload behavior.
+    Verify artifact identity, queue targeting, and manifest-backed queue upload
+    behavior.
 - usage:
     uv run python -m unittest discover -s tests -p 'test_launch_contracts.py'
     # Run the focused launch contract tests from the repository root.
 - user_story:
     content:
-        As a maintainer, I want focused tests around artifact identity and
-        one-off upload policy so launch isolation and configured storage remain
-        stable as the public package changes.
+        As a maintainer, I want focused tests around artifact identity, queue
+        targeting, and one-off upload policy so launch isolation and configured
+        storage remain stable as the public package changes.
     was_generated_via_skill: false
 """
 
@@ -26,7 +27,12 @@ from unittest.mock import Mock, patch
 from polyrepo.artifact_id import new_artifact_id
 from polyrepo.sync_repo import PublicationLayout, publish
 from polyrepo_launch import generator
-from tpu_dispatch_cli.queue_cli import build_parser, run_script
+from tpu_dispatch_cli.queue_cli import (
+    QueueCliError,
+    affinity_query,
+    build_parser,
+    run_script,
+)
 
 
 class LaunchContractTests(unittest.TestCase):
@@ -80,6 +86,46 @@ class LaunchContractTests(unittest.TestCase):
                     generator._parse_args()
 
         self.assertIn("Required for every invocation.", output.getvalue())
+
+    def test_queue_affinity_arguments(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "enqueue",
+                "hostname",
+                "--node-prefix",
+                "v6e-16-node",
+                "--node-range",
+                "1-3",
+            ]
+        )
+        self.assertEqual(
+            affinity_query(args),
+            "node_id IN (1, 2, 3) AND node_prefix = 'v6e-16-node'",
+        )
+
+        args = parser.parse_args(
+            ["reassign", "abc123", "--node-range", "1,3-5"]
+        )
+        self.assertEqual(args.command, "reassign")
+        self.assertEqual(args.job_id, "abc123")
+        self.assertEqual(affinity_query(args), "node_id IN (1, 3, 4, 5)")
+
+        args = parser.parse_args(
+            [
+                "enqueue",
+                "hostname",
+                "--node-id",
+                "1",
+                "--node-range",
+                "1-3",
+            ]
+        )
+        with self.assertRaisesRegex(
+            QueueCliError,
+            "--node-id cannot be combined with --node-range",
+        ):
+            affinity_query(args)
 
     def test_run_script_uses_manifest_gcs_root(self) -> None:
         args = build_parser().parse_args(["run-script", "job.sh", "--node-id", "21"])

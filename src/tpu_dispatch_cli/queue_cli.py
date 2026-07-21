@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 """
 - description:
-    Command-line client for the local tpu-dispatch queue API. This ports the
-    useful deploy_tpu queue-cli surface to tpu-dispatch without importing
-    deploy_tpu: queue CRUD, job lookup, cancellation, transition inspection,
-    node/job status, and one-off script enqueueing.
+    Polyrepo-template's command-line client for the local tpu-dispatch queue
+    API: queue CRUD, job lookup, cancellation, transition inspection, node/job
+    status, and one-off script enqueueing.
 - usage:
     # list jobs through the local dispatch daemon
-    queue-cli list
+    uv run queue-cli list
     # enqueue a regular command for node 21
-    queue-cli enqueue 'hostname' --node-id 21
+    uv run queue-cli enqueue 'hostname' --node-id 21
     # enqueue a regular command for any v6e node 1 through 20
-    queue-cli enqueue 'hostname' --node-range 1-20 --node-prefix v6e-16-node
+    uv run queue-cli enqueue 'hostname' --node-range 1-20 --node-prefix v6e-16-node
     # move a queued or active job to any v6e node 1 through 20
-    queue-cli reassign 76332eed --node-range 1-20 --node-prefix v6e-16-node
+    uv run queue-cli reassign 76332eed --node-range 1-20 --node-prefix v6e-16-node
     # upload a script to GCS and enqueue a fetch-and-run command
-    queue-cli run-script ./job.sh --node-id 21
+    uv run queue-cli run-script ./job.sh --node-id 21
     # inspect the worker.py tmux output for a node or assigned job
-    queue-cli logs --node-id 21 --lines 200
-    queue-cli logs --job-id 76332eed --lines 200
+    uv run queue-cli logs --node-id 21 --lines 200
+    uv run queue-cli logs --job-id 76332eed --lines 200
 - user_story:
     content:
         As the operator, Ohad needs the queue to have the same practical CLI
@@ -50,7 +49,6 @@ from dotenv import load_dotenv
 from polyrepo_launch.gcs_config import resolve_default_gcs_root
 
 
-# Temporary packaged copy while queue ownership moves after the dispatch module merge.
 API_KEY_ENV = "DEPLOY_API_KEY"
 SERVER_URL_ENV = "TPU_DISPATCH_SERVER_URL"
 LIVE_VIEW_URL_ENV = "TPU_LIVE_VIEW_URL"
