@@ -202,15 +202,16 @@ class _NamedScope:
     body_nodes: list[uuid.UUID]
 
 class Task:
-    def __init__(self, dag, params, named_fragments):
+    def __init__(self, dag, params, named_fragments, minor):
         self.params = {}
         for k, v in params.items():
             k = dag.node_dict[k].name
             self.params[k] = v
         self.named_fragments = named_fragments
+        self.minor = minor
 
     def __repr__(self):
-        return "Task(" + ", ".join([f"{k}={v}" for k, v in self.params.items()]) + ")"
+        return f"Task(minor={self.minor}, " + ", ".join([f"{k}={v}" for k, v in self.params.items()]) + ")"
 
     def __str__(self):
         return self.__repr__()
@@ -218,10 +219,10 @@ class Task:
     def __eq__(self, other):
         if not isinstance(other, Task):
             return False
-        return self.params == other.params
+        return self.minor == other.minor and self.params == other.params
 
     def __hash__(self):
-        return hash(tuple(sorted(self.params.items())))
+        return hash((self.minor, tuple(sorted(self.params.items()))))
 
 class GraphOperations(nx.DiGraph):
     def get_all_paths(self, start_node, end_node):
@@ -239,12 +240,15 @@ class DAG(GraphOperations):
         self.out = None
         self.scopes = []
         self.named_scopes = []
+        self.active_minor = None
+        self.node_minor = {}
 
     def add_param(self,node):
         self.add_node(node.uuid)
         self.params[node.uuid] = node.values
         self.layers.append(node.uuid)
         self.node_dict[node.uuid] = node
+        self.node_minor[node.uuid] = self.active_minor
         for scope in self.scopes:
             scope.body_nodes.append(node.uuid)
 
@@ -310,10 +314,16 @@ class DAG(GraphOperations):
                 self,
                 {path[i]: combo[i] for i in range(len(combo))},
                 self.named_fragments_for_path(path),
+                self.minor_for_path(path),
             )
             for path in all_paths
             for combo in self.cartesian_product(path)
         ]
+
+    def minor_for_path(self, path):
+        # Nodes outside any minor() block belong to minor 0; a path never spans two minor blocks.
+        (task_minor,) = {self.node_minor[node_uuid] for node_uuid in path} - {None} or {0}
+        return task_minor
 
     def named_fragments_for_path(self, path):
         path_node_set = set(path)
@@ -365,6 +375,28 @@ def named(label):
     return _Named(label)
 
 
+class _Minor:
+    """
+    with minor(1):
+        ex_plan() >> ldrounds(56)   # every task on this branch is emitted with minor=1
+    """
+    def __init__(self, number):
+        self.number = number
+
+    def __enter__(self):
+        dag = _ACTIVE_DAG.get()
+        assert dag.active_minor is None, "minor() blocks do not nest"
+        dag.active_minor = self.number
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        _ACTIVE_DAG.get().active_minor = None
+
+
+def minor(number):
+    return _Minor(number)
+
+
 def parse_type(x):
     # Experiment configs are project-authored and trusted for this launcher DSL.
     try:
@@ -408,15 +440,22 @@ class Bunch(dict):
         self[name] = value
 
 
-def get_all_experiments(experiment, config, exp_count, stop_fn=lambda x: False):
-    EXP_COUNT = f"v{exp_count}"
-    var_dict = {}
-    orig_task_dict = {}
+@dataclass(frozen=True)
+class Cell:
+    """One rendered task: its branch (minor), its parameter-derived name, and its exports."""
+    minor: int
+    name: str
+    exports: str
+    arg_vars: dict
+
+
+def get_all_experiments(experiment, config, stop_fn=lambda x: False):
+    cells = []
     for task in experiment.tasks:
         if stop_fn(task):
             continue
         state = dict(task.params)
-        state["WANDB_NAME"] = []
+        state["CELL_NAME"] = []
         ARG_VARS = Bunch()
         ARG_mapping, val_mapping, wandb_args = deepcopy(parse_config(config))
         explicit_wandb_args = list(wandb_args)
@@ -432,26 +471,30 @@ def get_all_experiments(experiment, config, exp_count, stop_fn=lambda x: False):
                 if param_name in task.named_fragments and param_name not in explicit_wandb_args:
                     label = task.named_fragments[param_name]
                     if label not in named_fragment_labels:
-                        state['WANDB_NAME'].append(label)
+                        state['CELL_NAME'].append(label)
                         named_fragment_labels.add(label)
                 else:
-                    state['WANDB_NAME'].append(f"{param_name}={value}")
+                    state['CELL_NAME'].append(f"{param_name}={value}")
             state[param_name] = parse_type(value)
             ARG_VARS[ARG_mapping[param_name]] = parse_type(value)
-        WANDB_NAME = ",".join(state['WANDB_NAME'])
-        WANDB_NAME = f"{EXP_COUNT}_{WANDB_NAME}"
-        ARG_VARS["WANDB_NAME"] = WANDB_NAME
+        # The launch identity (v{EXP}.{MINOR}.{PATCH}_$CELL_NAME) is composed by the
+        # train template; the plan only names the cell.
+        CELL_NAME = ",".join(state['CELL_NAME'])
+        ARG_VARS["CELL_NAME"] = CELL_NAME
 
         arg_list = []
         for var_name, var_value in ARG_VARS.items():
             # Export values preserve the same trusted config boundary as parse_type.
             arg_list.append(f'export {var_name}={var_value}')
-        args = "\n".join(arg_list)
-        assert WANDB_NAME not in var_dict
-        var_dict[WANDB_NAME] = args
-        orig_task_dict[WANDB_NAME] = deepcopy(ARG_VARS)
+        cells.append(Cell(
+            minor=task.minor,
+            name=CELL_NAME,
+            exports="\n".join(arg_list),
+            arg_vars=deepcopy(ARG_VARS),
+        ))
 
-    return var_dict, orig_task_dict
+    assert len({(cell.minor, cell.name) for cell in cells}) == len(cells)
+    return tuple(cells)
 def parse_config(config):
     v_opt,q_opt = config.strip().split("---")
     ARG_mapping,val_mapping = handle_opt(f"{v_opt}\n{q_opt}")
@@ -465,6 +508,7 @@ def load_config(config):
     locals = inspect.getargvalues(inspect.getouterframes(inspect.currentframe())[1].frame).locals
     assert "named" not in locals, "Variable named already exists in the global namespace"
     locals["named"] = named
+    locals["minor"] = minor
     for k,v in ARG_mapping.items():
         assert k not in locals, f"Variable {k} already exists in the global namespace"
         locals[f"_{k}"] = val_mapping[k]

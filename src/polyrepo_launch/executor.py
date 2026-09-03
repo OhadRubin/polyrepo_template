@@ -3,8 +3,14 @@
     Parse generated-training execution modes, select tasks for the chosen mode,
     and hand the queue generator a workload renderer supplied by the caller.
 - usage:
-    # Used by a project-local generator script; render one selected task locally.
-    uv run python scripts/make_training_scripts.py --dry-run --launch v6e-16-node-1 --only-run '<task-name>'
+    # Used by a project-local generator script; render every minor of plan 113, patch 0.
+    uv run python scripts/make_training_scripts.py --dry-run --launch v6e-16-node-1 --exp 113
+
+    # Minors 1 and 2 only (shell brace expansion), relaunched under a fresh identity (patch 2).
+    uv run python scripts/make_training_scripts.py --dry-run --launch v6e-16-node-1 --exp 113 --minor {1..2} --patch 2
+
+    # One cell, by its parameter-derived name, across the selected minors.
+    uv run python scripts/make_training_scripts.py --dry-run --launch v6e-16-node-1 --exp 113 --only-run '<cell-name>'
 
     # Render a repo-local payload wrapper.
     uv run python scripts/make_training_scripts.py --dry-run --launch v6e-16-node-1 --heredoc-file setup.sh --heredoc-result-root gs://example-bucket/runs/heredoc_results/check
@@ -37,7 +43,26 @@ from .generator import (
     render_script,
 )
 
-Task = tuple[str, str]
+@dataclass(frozen=True)
+class Task:
+    """One launchable cell under its full identity v{exp}.{minor}.{patch}_{cell}."""
+    exp: int
+    minor: int
+    patch: int
+    cell: str
+    exports: str
+
+    @property
+    def run_id(self) -> str:
+        return f"v{self.exp}.{self.minor}.{self.patch}_{self.cell}"
+
+
+@dataclass(frozen=True)
+class LaunchSelection:
+    """`--exp`, `--minor` (empty selects every emitted minor) and `--patch`."""
+    exps: tuple[int, ...]
+    minors: tuple[int, ...]
+    patch: int
 
 
 HEREDOC_PREAMBLE = r'''
@@ -189,11 +214,10 @@ class NormalExecutionMode:
         task: Task,
         normal_workload_command: str,
     ) -> WorkloadRenderRequest:
-        name, exports = task
-        assert name and exports and normal_workload_command
+        assert task.exports and normal_workload_command
         return WorkloadRenderRequest(
             task=task,
-            filename=f"run_{name}.sh",
+            filename=f"run_{task.run_id}.sh",
             preamble="",
             workload_command=normal_workload_command,
         )
@@ -214,8 +238,7 @@ class HeredocExecutionMode:
         task: Task,
         normal_workload_command: str,
     ) -> WorkloadRenderRequest:
-        name, exports = task
-        assert name and exports and normal_workload_command
+        assert task.exports and normal_workload_command
         return WorkloadRenderRequest(
             task=task,
             filename=self.filename,
@@ -285,12 +308,13 @@ def _pop_execution_args() -> ExecutionArgs:
 
 
 def select_plan(plan: tuple[Task, ...], only_runs: tuple[str, ...]) -> tuple[Task, ...]:
+    """Keeps the named cells in every selected minor."""
     if not only_runs:
         return plan
-    tasks_by_name = {task[0]: task for task in plan}
-    missing = [name for name in only_runs if name not in tasks_by_name]
+    selected = tuple(task for task in plan if task.cell in only_runs)
+    missing = set(only_runs) - {task.cell for task in selected}
     assert not missing, missing
-    return tuple(tasks_by_name[name] for name in only_runs)
+    return selected
 
 
 def _pop_execution_mode() -> ExecutionMode:
@@ -299,34 +323,44 @@ def _pop_execution_mode() -> ExecutionMode:
     return EXECUTION_MODE_FACTORIES[mode_name](args)
 
 
-def _pop_exp_count(registry: ExperimentRegistry, heredoc: bool) -> int:
+def _pop_launch_selection(registry: ExperimentRegistry, heredoc: bool) -> LaunchSelection:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--exp", type=int)
+    # `nargs="+"` lets the shell's `{A..B}` expansion pass several values.
+    parser.add_argument("--exp", type=int, nargs="+")
+    parser.add_argument("--minor", type=int, nargs="+")
+    parser.add_argument("--patch", type=int, default=0)
     known, rest = parser.parse_known_args(sys.argv[1:])
     sys.argv = [sys.argv[0], *rest]
-    if known.exp is not None:
-        return known.exp
-    # a heredoc payload replaces the plan, so which plan carries it is
-    # immaterial; normal launches must say which plan they run
-    assert heredoc, "--exp <N> is required (which registered plan to run)"
-    return min(registry.builders)
+    if known.exp is None:
+        # a heredoc payload replaces the plan, so which plan carries it is
+        # immaterial; normal launches must say which plan they run
+        assert heredoc, "--exp <N> is required (which registered plan to run)"
+        exps = (min(registry.builders),)
+    else:
+        exps = tuple(known.exp)
+    return LaunchSelection(
+        exps=exps,
+        minors=() if known.minor is None else tuple(known.minor),
+        patch=known.patch,
+    )
 
 
 def render_workload(
     request: WorkloadRenderRequest,
     setup: str,
     gcs_roots: GcsRoots,
-    exp_count: int,
     train_template: str,
 ) -> RenderedScript:
-    name, exports = request.task
-    assert name and exports and exp_count and train_template
+    task = request.task
+    assert task.exports and train_template
     return render_script(
         RenderSpec(
             filename=request.filename,
-            fragments=(request.preamble, setup, exports, train_template),
+            fragments=(request.preamble, setup, task.exports, train_template),
             variables={
-                "EXP": exp_count,
+                "EXP": task.exp,
+                "MINOR": task.minor,
+                "PATCH": task.patch,
                 "READ_GCS_ROOT": gcs_roots.read_root,
                 "WRITE_GCS_ROOT": gcs_roots.write_root,
                 "WORKLOAD_COMMAND": request.workload_command,
@@ -342,22 +376,28 @@ def stop_at_task(task: object) -> bool:
 
 def make_plan(
     registry: ExperimentRegistry,
-    exp_count: int,
+    selection: LaunchSelection,
     config: object,
     runtime_args: RuntimeArgsRenderer,
 ) -> tuple[Task, ...]:
-    experiment = registry.build(exp_count)
-    task_dict, odict = dag.get_all_experiments(
-        experiment,
-        config,
-        exp_count,
-        stop_at_task,
-    )
     plan = tuple(
-        (name, "\n".join((task_dict[name], runtime_args(odict[name]))))
-        for name in task_dict
+        Task(
+            exp=exp,
+            minor=cell.minor,
+            patch=selection.patch,
+            cell=cell.name,
+            exports="\n".join((
+                f"export WANDB_NAME=v{exp}.{cell.minor}.{selection.patch}_{cell.name}",
+                cell.exports,
+                runtime_args(cell.arg_vars),
+            )),
+        )
+        for exp in selection.exps
+        for cell in dag.get_all_experiments(registry.build(exp), config, stop_at_task)
+        if not selection.minors or cell.minor in selection.minors
     )
-    assert plan, exp_count
+    missing_minors = set(selection.minors) - {task.minor for task in plan}
+    assert plan and not missing_minors, (selection, missing_minors)
     return plan
 
 
@@ -369,11 +409,11 @@ def run(
     normal_workload_command: str,
 ) -> None:
     mode = _pop_execution_mode()
-    exp_count = _pop_exp_count(
+    selection = _pop_launch_selection(
         registry, isinstance(mode, HeredocExecutionMode)
     )
-    plan = make_plan(registry, exp_count, config, runtime_args)
-    assert plan and exp_count and train_template and normal_workload_command
+    plan = make_plan(registry, selection, config, runtime_args)
+    assert train_template and normal_workload_command
     selected_plan = mode.select_plan(plan)
     assert selected_plan
 
@@ -382,7 +422,6 @@ def run(
             mode.render_request(task, normal_workload_command),
             setup,
             gcs_roots,
-            exp_count,
             train_template,
         )
 

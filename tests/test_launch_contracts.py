@@ -27,7 +27,7 @@ from unittest.mock import Mock, patch
 
 from polyrepo.artifact_id import new_artifact_id
 from polyrepo.sync_repo import PublicationLayout, publish
-from polyrepo_launch import generator
+from polyrepo_launch import dag, executor, generator
 from tpu_dispatch_cli.queue_cli import (
     QueueCliError,
     affinity_query,
@@ -44,6 +44,40 @@ class LaunchContractTests(unittest.TestCase):
         self.assertRegex(first, r"^\d{8}T\d{6}Z_[0-9a-f]{32}$")
         self.assertRegex(second, r"^\d{8}T\d{6}Z_[0-9a-f]{32}$")
         self.assertNotEqual(first, second)
+
+    def test_minor_blocks_select_branches(self) -> None:
+        registry = executor.ExperimentRegistry({})
+        config = "LR, lr, 1e-4\nROUNDS, rounds, 28\n---\nSEED, seed, 0\n"
+
+        @registry.plan(113)
+        def add_layerdrop_rounds() -> None:
+            lr, rounds = dag.Node("lr"), dag.Node("rounds")
+            ex_plan = lambda: lr("1.5e-4")
+            with dag.minor(0):
+                ex_plan() >> rounds(28)
+            with dag.minor(1):
+                ex_plan() >> rounds(56, 112)
+
+        no_runtime_args = lambda arg_vars: ""
+        every_minor = executor.LaunchSelection(exps=(113,), minors=(), patch=0)
+        plan = executor.make_plan(registry, every_minor, config, no_runtime_args)
+        self.assertEqual(
+            [task.run_id for task in plan],
+            [
+                "v113.0.0_rounds=28,lr=1.5e-4",
+                "v113.1.0_rounds=56,lr=1.5e-4",
+                "v113.1.0_rounds=112,lr=1.5e-4",
+            ],
+        )
+
+        minor_one_patch_two = executor.LaunchSelection(exps=(113,), minors=(1,), patch=2)
+        relaunch = executor.make_plan(registry, minor_one_patch_two, config, no_runtime_args)
+        self.assertEqual({task.minor for task in relaunch}, {1})
+        self.assertIn("export WANDB_NAME=v113.1.2_rounds=56,lr=1.5e-4\n", relaunch[0].exports)
+        self.assertEqual((relaunch[0].minor, relaunch[0].patch), (1, 2))
+
+        one_cell = executor.select_plan(plan, ("rounds=28,lr=1.5e-4",))
+        self.assertEqual([task.run_id for task in one_cell], ["v113.0.0_rounds=28,lr=1.5e-4"])
 
     def test_publish_reuses_frozen_base_across_gcs_roots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
