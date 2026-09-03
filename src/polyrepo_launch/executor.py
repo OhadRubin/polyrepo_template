@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import shlex
 import sys
 from collections.abc import Callable
@@ -116,6 +117,17 @@ class RuntimeArgsRenderer(Protocol):
         raise NotImplementedError
 
 
+def shell_array(name: str, args: list[str]) -> str:
+    """Renders a bash array assignment for a runtime_args fragment."""
+    if not args:
+        return f"{name}=()"
+    return "\n".join((
+        f"{name}=(",
+        *(f'  "{arg}"' for arg in args),
+        ")",
+    ))
+
+
 @dataclass(frozen=True)
 class ExperimentRegistry:
     builders: dict[int, ExperimentBuilder]
@@ -138,6 +150,26 @@ class ExperimentRegistry:
             return builder
 
         return decorator
+
+    def plan(
+        self,
+        *exp_counts: int,
+    ) -> Callable[[Callable[[], None]], Callable[[], None]]:
+        """Registers an `add_*` sweep function as the numbered plan(s),
+        absorbing the `with dag.DAG(): ...` builder boilerplate. Returns
+        the add function unchanged so plans can still compose each other."""
+
+        def wrap(add_fn: Callable[[], None]) -> Callable[[], None]:
+            @self.register(*exp_counts)
+            @functools.wraps(add_fn)
+            def build() -> dag.DAG:
+                with dag.DAG() as experiment:
+                    add_fn()
+                return experiment
+
+            return add_fn
+
+        return wrap
 
     def build(self, exp_count: int) -> dag.DAG:
         assert exp_count in self.builders, exp_count
@@ -267,6 +299,19 @@ def _pop_execution_mode() -> ExecutionMode:
     return EXECUTION_MODE_FACTORIES[mode_name](args)
 
 
+def _pop_exp_count(registry: ExperimentRegistry, heredoc: bool) -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--exp", type=int)
+    known, rest = parser.parse_known_args(sys.argv[1:])
+    sys.argv = [sys.argv[0], *rest]
+    if known.exp is not None:
+        return known.exp
+    # a heredoc payload replaces the plan, so which plan carries it is
+    # immaterial; normal launches must say which plan they run
+    assert heredoc, "--exp <N> is required (which registered plan to run)"
+    return min(registry.builders)
+
+
 def render_workload(
     request: WorkloadRenderRequest,
     setup: str,
@@ -318,15 +363,17 @@ def make_plan(
 
 def run(
     registry: ExperimentRegistry,
-    exp_count: int,
     config: object,
     runtime_args: RuntimeArgsRenderer,
     train_template: str,
     normal_workload_command: str,
 ) -> None:
+    mode = _pop_execution_mode()
+    exp_count = _pop_exp_count(
+        registry, isinstance(mode, HeredocExecutionMode)
+    )
     plan = make_plan(registry, exp_count, config, runtime_args)
     assert plan and exp_count and train_template and normal_workload_command
-    mode = _pop_execution_mode()
     selected_plan = mode.select_plan(plan)
     assert selected_plan
 

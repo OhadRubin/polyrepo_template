@@ -39,12 +39,13 @@ OUTPUT_ROOT = "generated_training_scripts"
 WANDB_KEY_ENV_VAR = "WANDB_API_KEY"
 TPU_NODE_RE = re.compile(r"^(?P<tpu_type>[^-]+)-(?P<n_chips>\d+)-node-(?P<node_id>\d+)$")
 WORKERS_PER_TPU_SHAPE = {
-    ("v4", 256): 32,
+    # the fleet at ids 41+ is v4-64: 32 chips over 8 hosts of 4 chips each
+    ("v4", 64): 8,
     ("v5p", 32): 4,
     ("v6e", 16): 4,
 }
 NODE_ID_RANGES_PER_TPU_SHAPE = {
-    ("v4", 256): range(41, 61),
+    ("v4", 64): range(41, 65),
     ("v5p", 32): range(21, 41),
     ("v6e", 16): range(1, 21),
 }

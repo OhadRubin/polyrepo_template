@@ -90,6 +90,14 @@ class _GraphExpr:
         self.exits = tuple(dict.fromkeys(exits))
         self.nodes = tuple(dict.fromkeys(nodes))
 
+    def named(self, label):
+        """Collapse this expression under one generated run-name label."""
+        self.dag.named_scopes.append((
+            {node.uuid for node in self.nodes},
+            label,
+        ))
+        return self
+
     def __rshift__(self, other):
         if not isinstance(other, _GraphExpr):
             return NotImplemented

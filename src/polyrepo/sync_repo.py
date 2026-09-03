@@ -227,6 +227,34 @@ def _create_base_archive(state: PolyrepoState) -> None:
     )
 
 
+def _publish_frozen_base(
+    state: PolyrepoState,
+    artifact_store: GsutilArtifactStore,
+    publication_layout: PublicationLayout,
+) -> None:
+    """Publish this frozen archive once to each configured storage root."""
+    metadata_path = state.sync.snapshot_path / "freeze_meta.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    published_gcs_roots = metadata["published_gcs_roots"]
+    if publication_layout.gcs_root in published_gcs_roots:
+        print(
+            "Frozen snapshot already published to "
+            f"{publication_layout.frozen_base_uri}"
+        )
+        return
+
+    artifact_store.upload(
+        state.sync.snapshot_path / "base.tar.gz",
+        publication_layout.frozen_base_uri,
+    )
+    metadata["published_gcs_roots"] = sorted({
+        *published_gcs_roots,
+        publication_layout.gcs_root,
+    })
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    print(f"Frozen snapshot uploaded to {publication_layout.frozen_base_uri}")
+
+
 def _freeze(
     state: PolyrepoState,
     artifact_store: GsutilArtifactStore,
@@ -266,16 +294,13 @@ def _freeze(
             {
                 "frozen_at": datetime.now().isoformat(),
                 "manifest_digest": state.manifest_digest,
+                "published_gcs_roots": [],
             }
         ),
         encoding="utf-8",
     )
     _create_base_archive(state)
-    artifact_store.upload(
-        state.sync.snapshot_path / "base.tar.gz",
-        publication_layout.frozen_base_uri,
-    )
-    print(f"Frozen snapshot uploaded to {publication_layout.frozen_base_uri}")
+    _publish_frozen_base(state, artifact_store, publication_layout)
 
 
 def _frozen_base_matches(state: PolyrepoState) -> bool:
@@ -284,6 +309,8 @@ def _frozen_base_matches(state: PolyrepoState) -> bool:
         return False
     metadata = json.loads(meta_path.read_text(encoding="utf-8"))
     if metadata.get("manifest_digest") != state.manifest_digest:
+        return False
+    if "published_gcs_roots" not in metadata:
         return False
     if not (state.sync.snapshot_path / "base.tar.gz").is_file():
         return False
@@ -399,6 +426,7 @@ def publish(workspace_root: Path, gcs_root: str) -> PublishedWorkspace:
             _freeze(state, artifact_store, publication_layout)
         else:
             print(f"Using existing frozen base at {state.sync.snapshot_path / 'base.tar.gz'}")
+            _publish_frozen_base(state, artifact_store, publication_layout)
         patch_uri = _compute_patch(state, artifact_store, publication_layout)
 
     return PublishedWorkspace(

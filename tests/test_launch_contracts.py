@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -44,39 +45,54 @@ class LaunchContractTests(unittest.TestCase):
         self.assertRegex(second, r"^\d{8}T\d{6}Z_[0-9a-f]{32}$")
         self.assertNotEqual(first, second)
 
-    def test_publish_reuses_frozen_base_across_patches(self) -> None:
+    def test_publish_reuses_frozen_base_across_gcs_roots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            layout = PublicationLayout("gs://configured/polyrepo/product")
+            first_layout = PublicationLayout("gs://first/polyrepo/product")
+            second_layout = PublicationLayout("gs://second/polyrepo/product")
+            snapshot_path = Path(directory) / "snapshot"
+            snapshot_path.mkdir()
+            (snapshot_path / "base.tar.gz").write_bytes(b"base")
+            (snapshot_path / "freeze_meta.json").write_text(
+                '{"manifest_digest": "manifest-digest", '
+                '"published_gcs_roots": ["gs://first/polyrepo/product"]}',
+                encoding="utf-8",
+            )
             state = SimpleNamespace(
                 manifest_digest="manifest-digest",
                 workspace=SimpleNamespace(remote_path=Path("workspace")),
                 repositories={},
-                sync=SimpleNamespace(snapshot_path=Path(directory) / "snapshot"),
+                sync=SimpleNamespace(snapshot_path=snapshot_path),
             )
             patch_uris = [
-                layout.patch_uri("first"),
-                layout.patch_uri("second"),
+                first_layout.patch_uri("first"),
+                second_layout.patch_uri("second"),
             ]
 
             with (
                 patch("polyrepo.sync_repo.load_state", return_value=state),
                 patch(
-                    "polyrepo.sync_repo._frozen_base_matches",
-                    side_effect=[False, True],
-                ),
-                patch("polyrepo.sync_repo._freeze") as freeze_base,
-                patch(
                     "polyrepo.sync_repo._compute_patch",
                     side_effect=patch_uris,
                 ),
+                patch("polyrepo.sync_repo.GsutilArtifactStore.upload") as upload,
             ):
-                first = publish(Path(directory), layout.gcs_root)
-                second = publish(Path(directory), layout.gcs_root)
+                first = publish(Path(directory), first_layout.gcs_root)
+                second = publish(Path(directory), second_layout.gcs_root)
 
-            freeze_base.assert_called_once()
-            self.assertEqual(first.base_uri, layout.frozen_base_uri)
-            self.assertEqual(second.base_uri, first.base_uri)
-            self.assertNotEqual(second.patch_uri, first.patch_uri)
+            upload.assert_called_once_with(
+                snapshot_path / "base.tar.gz",
+                second_layout.frozen_base_uri,
+            )
+            self.assertEqual(first.base_uri, first_layout.frozen_base_uri)
+            self.assertEqual(second.base_uri, second_layout.frozen_base_uri)
+            self.assertEqual(
+                json.loads(
+                    (snapshot_path / "freeze_meta.json").read_text(
+                        encoding="utf-8"
+                    )
+                )["published_gcs_roots"],
+                [first_layout.gcs_root, second_layout.gcs_root],
+            )
 
     def test_generator_help_requires_launch_target(self) -> None:
         output = io.StringIO()
