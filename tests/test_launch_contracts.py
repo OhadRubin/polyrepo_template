@@ -73,7 +73,14 @@ class LaunchContractTests(unittest.TestCase):
         minor_one_patch_two = executor.LaunchSelection(exps=(113,), minors=(1,), patch=2)
         relaunch = executor.make_plan(registry, minor_one_patch_two, config, no_runtime_args)
         self.assertEqual({task.minor for task in relaunch}, {1})
-        self.assertIn("export WANDB_NAME=v113.1.2_rounds=56,lr=1.5e-4\n", relaunch[0].exports)
+        self.assertIn(
+            "export WANDB_NAME=v113.1.2_rounds=56,lr=1.5e-4\n"
+            "export POLYREPO_EXP=113\n"
+            "export POLYREPO_MINOR=1\n"
+            "export POLYREPO_PATCH=2\n"
+            'export WANDB_TAGS="v113,v113.1,v113.1.2,v113.X.2"\n',
+            relaunch[0].exports,
+        )
         self.assertEqual((relaunch[0].minor, relaunch[0].patch), (1, 2))
 
         one_cell = executor.select_plan(plan, ("rounds=28,lr=1.5e-4",))

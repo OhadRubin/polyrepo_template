@@ -388,6 +388,12 @@ def make_plan(
             cell=cell.name,
             exports="\n".join((
                 f"export WANDB_NAME=v{exp}.{cell.minor}.{selection.patch}_{cell.name}",
+                f"export POLYREPO_EXP={exp}",
+                f"export POLYREPO_MINOR={cell.minor}",
+                f"export POLYREPO_PATCH={selection.patch}",
+                f'export WANDB_TAGS="v{exp},v{exp}.{cell.minor},'
+                f'v{exp}.{cell.minor}.{selection.patch},'
+                f'v{exp}.X.{selection.patch}"',
                 cell.exports,
                 runtime_args(cell.arg_vars),
             )),

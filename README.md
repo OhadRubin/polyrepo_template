@@ -17,6 +17,18 @@ The broader launch architecture has four layers:
 
 The same process can support one-off diagnostic commands, keeping operator tools and larger workloads on one execution path.
 
+The launch executor exports `POLYREPO_EXP`, `POLYREPO_MINOR`, and
+`POLYREPO_PATCH` for each task, alongside
+`WANDB_NAME=v{exp}.{minor}.{patch}_{cell}`. These identify the experiment
+plan, its parameter branch, and the launch of that branch. It also exports
+`WANDB_TAGS=v{exp},v{exp}.{minor},v{exp}.{minor}.{patch},v{exp}.X.{patch}`
+so W&B can group runs by experiment, branch, branch and patch together,
+or patch across all branches. Workloads can read these exports directly
+to record launch metadata. After `wandb.init()`, call
+`polyrepo_launch.wandb_utils.deprecate_previous_patches(run)` to tag all
+existing lower patches of the same experiment, branch, and cell as
+`deprecated`, preserving their other tags.
+
 Only source-relevant files are be published. Ignored files—such as datasets, credentials, checkpoints, generated outputs, and machine-specific artifacts—remain outside the archives. Because patches may contain unpublished code or configuration, they require controlled storage and source-code-level security. Generated scripts can contain the W&B key, so keep the GCS artifact bucket private.
 
 Overall, the substrate creates a shared contract between development and remote execution: declare the workspace once, publish its current state at launch time, reconstruct it remotely, and submit the resulting scripts through any supported execution backend.
