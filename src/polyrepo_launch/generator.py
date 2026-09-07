@@ -95,10 +95,8 @@ def render_blocks(fragments: tuple[str, ...], variables: dict[str, object]) -> s
     undeclared_variables = meta.find_undeclared_variables(JINJA_ENV.parse(script))
     inputs = set(variables)
     missing = undeclared_variables - inputs
-    unused = inputs - undeclared_variables
-    assert not missing and not unused, (
-        f"Template input mismatch: missing={sorted(missing)}, unused={sorted(unused)}"
-    )
+    # Templates select the metadata they use from the available variables.
+    assert not missing, f"Template input mismatch: missing={sorted(missing)}"
     return JINJA_ENV.from_string(script).render(**variables)
 
 
