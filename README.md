@@ -29,6 +29,12 @@ to record launch metadata. After `wandb.init()`, call
 existing lower patches of the same experiment, branch, and cell as
 `deprecated`, preserving their other tags.
 
+The executor also exports `POLYREPO_SHORT_CONFIG`, a JSON object containing
+every knob's short name and resolved value, including defaults and knobs
+inside `.named(...)` groups. After `wandb.init()`, call
+`polyrepo_launch.wandb_utils.add_short_names_to_config(run)` to add these
+as config keys such as `lr`, `mult`, and `model`. Numeric values stay numeric.
+
 Only source-relevant files are be published. Ignored files—such as datasets, credentials, checkpoints, generated outputs, and machine-specific artifacts—remain outside the archives. Because patches may contain unpublished code or configuration, they require controlled storage and source-code-level security. Generated scripts can contain the W&B key, so keep the GCS artifact bucket private.
 
 Overall, the substrate creates a shared contract between development and remote execution: declare the workspace once, publish its current state at launch time, reconstruct it remotely, and submit the resulting scripts through any supported execution backend.

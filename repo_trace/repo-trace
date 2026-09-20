@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Keep the tracing tool independent of the target project's dependencies.
+set -euo pipefail
+exec uv run --no-project python "$(dirname "$(realpath "$0")")/scripts/path_trace/cli.py" "$@"

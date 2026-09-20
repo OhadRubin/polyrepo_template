@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -37,6 +38,26 @@ from tpu_dispatch_cli.queue_cli import (
 
 
 class LaunchContractTests(unittest.TestCase):
+    def test_structured_knobs_survive_shell_exports(self) -> None:
+        with dag.DAG() as experiment:
+            dag.Node('capacities')((2, 3, 4, 5, 6, 7)) >> dag.Node('limits')(
+                '{"threshold": 0.5, "count": 4}'
+            ) >> dag.Node('label')('two words; $(false)')
+        cell, = dag.get_all_experiments(experiment, (
+            '---\nCAPACITIES, capacities, train\n'
+            'LIMITS, limits, null\nLABEL, label, unset\n'
+        ))
+        result = subprocess.run(
+            ['bash', '-c', cell.exports + '\n'
+             'printf "%s\\n" "$CAPACITIES" "$LIMITS" "$LABEL"'],
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        self.assertEqual(
+            [json.loads(result[0]), json.loads(result[1]), result[2]],
+            [[2, 3, 4, 5, 6, 7], {'threshold': 0.5, 'count': 4},
+             'two words; $(false)'],
+        )
+
     def test_artifact_ids_are_unique(self) -> None:
         first = new_artifact_id()
         second = new_artifact_id()

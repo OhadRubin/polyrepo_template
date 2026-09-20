@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import shlex
 import sys
 from collections.abc import Callable
@@ -380,6 +381,7 @@ def make_plan(
     config: object,
     runtime_args: RuntimeArgsRenderer,
 ) -> tuple[Task, ...]:
+    short_names, _, _ = dag.parse_config(config)
     plan = tuple(
         Task(
             exp=exp,
@@ -387,13 +389,20 @@ def make_plan(
             patch=selection.patch,
             cell=cell.name,
             exports="\n".join((
-                f"export WANDB_NAME=v{exp}.{cell.minor}.{selection.patch}_{cell.name}",
+                "export WANDB_NAME=" + shlex.quote(
+                    f"v{exp}.{cell.minor}.{selection.patch}_{cell.name}"
+                ),
                 f"export POLYREPO_EXP={exp}",
                 f"export POLYREPO_MINOR={cell.minor}",
                 f"export POLYREPO_PATCH={selection.patch}",
                 f'export WANDB_TAGS="v{exp},v{exp}.{cell.minor},'
                 f'v{exp}.{cell.minor}.{selection.patch},'
                 f'v{exp}.X.{selection.patch}"',
+                # Capture defaults and named fragments before shell rendering.
+                "export POLYREPO_SHORT_CONFIG=" + shlex.quote(json.dumps({
+                    short: cell.arg_vars[full]
+                    for short, full in short_names.items()
+                })),
                 cell.exports,
                 runtime_args(cell.arg_vars),
             )),

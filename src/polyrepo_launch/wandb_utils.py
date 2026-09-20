@@ -17,10 +17,22 @@
 
 from __future__ import annotations
 
+import json
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import wandb
+
+
+def add_short_names_to_config(current_run: wandb.Run) -> None:
+    """Add every resolved launch knob under its short name to W&B config."""
+    # Read the alias values captured by the launcher, including named groups.
+    # Resolved aliases own these columns, including names such as lr that
+    # the training config initially logs as a structured schedule.
+    current_run.config.update(
+        json.loads(os.environ["POLYREPO_SHORT_CONFIG"]), allow_val_change=True
+    )
 
 
 def deprecate_previous_patches(current_run: wandb.Run) -> None:

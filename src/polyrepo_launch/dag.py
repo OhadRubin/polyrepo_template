@@ -6,6 +6,7 @@ from itertools import product
 import uuid
 import json
 import os
+import shlex
 import tempfile
 
 """
@@ -485,7 +486,12 @@ def get_all_experiments(experiment, config, stop_fn=lambda x: False):
         arg_list = []
         for var_name, var_value in ARG_VARS.items():
             # Export values preserve the same trusted config boundary as parse_type.
-            arg_list.append(f'export {var_name}={var_value}')
+            # Structured knobs cross the process boundary as JSON; shell
+            # quoting preserves their contents as one environment value.
+            value = (json.dumps(var_value)
+                     if isinstance(var_value, (dict, list, tuple))
+                     else str(var_value))
+            arg_list.append(f'export {var_name}={shlex.quote(value)}')
         cells.append(Cell(
             minor=task.minor,
             name=CELL_NAME,
